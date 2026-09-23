@@ -8,7 +8,7 @@
 > 更新时间：2026-09-23
 ***********************************************/
 
-const version = "V1.0.29-rnote-fix";
+const version = "V1.0.30-rnote-fix";
 const $ = new Env("小红书");
 $.RedBookPhotoKey = "RedBookPhotoKey";
 $.RedBookVideoKey = "RedBookVideoKey";
@@ -91,20 +91,40 @@ function handleBody() {
   }
 
   // 评论列表：去水印（含 sub_comments）
+  // HAR 验证：url 与 origin_url 相同，均带 imageView2（会压成带处理的 HEIF）；
+  // 去掉 imageView2/redImage 等处理参数后，CDN 返回完整 JPEG 原图（如 1920x2560）。
   if (/\/api\/sns\/v\d+\/note\/comment\/list(?:\?|$)/.test(url)) {
     try {
       const obj = JSON.parse(body);
+      // 去掉 CDN 实时处理参数，保留路径本体（可选保留 sign/t，实测无参也可 200）
+      const stripProcessParams = function (raw) {
+        if (!raw || typeof raw !== "string") return raw;
+        try {
+          // 去掉 ? 后所有 query（imageView2 / redImage / ap / sc / format 等）
+          const q = raw.indexOf("?");
+          if (q === -1) return raw;
+          return raw.slice(0, q);
+        } catch (e) {
+          return raw;
+        }
+      };
       const fixPictures = function (pics) {
         if (!Array.isArray(pics)) return;
         for (let i = 0; i < pics.length; i++) {
           const pic = pics[i];
           if (!pic || typeof pic !== "object") continue;
-          // 优先 meme_package（通常无额外水印处理），其次 origin_url
+          // 1) 若有 meme_package，优先用其 image_url（并同样去处理参数）
           if (pic.meme_package && pic.meme_package.image_url) {
-            pic.url = pic.meme_package.image_url;
-            pic.origin_url = pic.meme_package.image_url;
-          } else if (pic.origin_url) {
-            pic.url = pic.origin_url;
+            const clean = stripProcessParams(pic.meme_package.image_url);
+            pic.url = clean;
+            pic.origin_url = clean;
+            continue;
+          }
+          // 2) 否则对 url / origin_url 去 imageView2 等参数，拿到原图 JPEG
+          const base = stripProcessParams(pic.origin_url || pic.url);
+          if (base) {
+            pic.url = base;
+            pic.origin_url = base;
           }
         }
       };
@@ -118,7 +138,7 @@ function handleBody() {
         }
       }
       body = JSON.stringify(obj);
-      console.log("[小红书] comment/list pictures fixed");
+      console.log("[小红书] comment/list pictures stripped imageView2");
     } catch (e) {
       console.log("[小红书] comment/list: " + e);
     }
